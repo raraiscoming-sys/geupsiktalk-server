@@ -1,13 +1,13 @@
 {
   "name": "geupsiktalk-skill-server",
-  "version": "4.0.0",
-  "description": "Kakao chatbot skill server for school meals using NEIS Open API",
+  "version": "1.0.0",
+  "description": "Kakao chatbot skill server for school meal lookup, user type selection, quick reply buttons, dinner recommendation, and shopping list.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "express": "^4.18.3"
