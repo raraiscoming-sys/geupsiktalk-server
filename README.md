@@ -1,22 +1,39 @@
-# 급식톡 카카오 챗봇 스킬 서버 v2
+# 급식톡 카카오 챗봇 스킬 서버 v3
+
+Render 배포용 안정 테스트 버전입니다.
 
 ## Render 설정
 
-- Runtime: Node
-- Build Command: `npm install`
-- Start Command: `npm start`
+Build Command:
+```
+npm install
+```
 
-## Environment Variables
+Start Command:
+```
+npm start
+```
 
-- `NEIS_API_KEY`: 나이스 Open API 인증키
-- `NODE_ENV`: `production`
+Environment Variables:
+```
+NEIS_API_KEY=나이스 API 키
+NODE_ENV=production
+```
 
-## 확인 주소
+## 테스트 주소
 
-- `/` : 서버 실행 확인
-- `/health` : 환경변수 확인
-- `/skill` : 카카오 챗봇 스킬 POST URL
+배포 후 브라우저에서 아래 주소를 확인하세요.
 
-## 카카오 챗봇 스킬 URL 예시
+```
+https://렌더주소.onrender.com/
+```
 
-`https://서비스이름.onrender.com/skill`
+정상 문구:
+```
+geupsiktalk kakao skill server is running. Use POST /skill
+```
+
+카카오 스킬 URL:
+```
+https://렌더주소.onrender.com/skill
+```
