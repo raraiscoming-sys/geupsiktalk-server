@@ -124,14 +124,14 @@ async function searchSchools(query) {
   }));
 }
 
-async function getMeal(school, ymd) {
+async function getMeals(school, ymd) {
   const url = 'https://open.neis.go.kr/hub/mealServiceDietInfo';
   const res = await axios.get(url, {
     params: {
       KEY: NEIS_API_KEY,
       Type: 'json',
       pIndex: 1,
-      pSize: 10,
+      pSize: 20,
       ATPT_OFCDC_SC_CODE: school.officeCode,
       SD_SCHUL_CODE: school.schoolCode,
       MLSV_YMD: ymd
@@ -139,16 +139,22 @@ async function getMeal(school, ymd) {
     timeout: 10000
   });
   const rows = res.data?.mealServiceDietInfo?.[1]?.row || [];
-  if (!rows.length) return null;
-  const lunch = rows.find(r => r.MMEAL_SC_NM === '중식') || rows[0];
-  return {
-    date: lunch.MLSV_YMD,
-    mealType: lunch.MMEAL_SC_NM,
-    dishesRaw: lunch.DDISH_NM || '',
-    origin: lunch.ORPLC_INFO || '',
-    nutrition: lunch.NTR_INFO || '',
-    calories: lunch.CAL_INFO || ''
-  };
+  const order = { '조식': 1, '중식': 2, '석식': 3 };
+  return rows
+    .sort((a, b) => (order[a.MMEAL_SC_NM] || 99) - (order[b.MMEAL_SC_NM] || 99))
+    .map(r => ({
+      date: r.MLSV_YMD,
+      mealType: r.MMEAL_SC_NM,
+      dishesRaw: r.DDISH_NM || '',
+      origin: r.ORPLC_INFO || '',
+      nutrition: r.NTR_INFO || '',
+      calories: r.CAL_INFO || ''
+    }));
+}
+
+function pickLunchOrFirst(meals) {
+  if (!Array.isArray(meals) || !meals.length) return null;
+  return meals.find(m => m.mealType === '중식') || meals[0];
 }
 
 function cleanDishLineKeepAllergy(line) {
@@ -188,20 +194,62 @@ function allergyLegend() {
   return '알레르기 번호: 1난류 2우유 3메밀 4땅콩 5대두 6밀 7고등어 8게 9새우 10돼지고기 11복숭아 12토마토 13아황산류 14호두 15닭고기 16쇠고기 17오징어 18조개류 19잣';
 }
 
-function mealToText(school, meal, ymd, role) {
-  if (!meal) {
-    return `🍱 ${school.name}\n${formatDateKorean(ymd)} 급식 정보가 없어요.\n\n휴일, 방학, 재량휴업일이거나 아직 급식 정보가 등록되지 않았을 수 있어요.`;
-  }
+function singleMealBlock(meal) {
   const lines = parseDishLines(meal.dishesRaw);
   const numbers = extractAllergyNumbers(lines);
-  let text = `🍱 ${school.name} ${meal.mealType}\n${formatDateKorean(ymd)}\n\n`;
-  text += lines.map(v => `· ${v}`).join('\n');
-  if (meal.calories) text += `\n\n🔥 ${meal.calories}`;
-  text += `\n\n⚠️ 포함 알레르기: ${allergySummary(numbers)}`;
-  text += `\n${allergyLegend()}`;
+  let text = `🍽️ ${meal.mealType}
+`;
+  text += lines.length ? lines.map(v => `· ${v}`).join('
+') : '메뉴 정보 없음';
+  if (meal.calories) text += `
+🔥 ${meal.calories}`;
+  text += `
+⚠️ ${allergySummary(numbers)}`;
+  return { text, lines, numbers };
+}
+
+function mealsToText(school, meals, ymd, role) {
+  if (!meals || !meals.length) {
+    return `🍱 ${school.name}
+${formatDateKorean(ymd)} 급식 정보가 없어요.
+
+휴일, 방학, 재량휴업일이거나 아직 급식 정보가 등록되지 않았을 수 있어요.`;
+  }
+
+  const blocks = meals.map(singleMealBlock);
+  const allNumbers = Array.from(new Set(blocks.flatMap(b => b.numbers))).sort((a,b) => Number(a)-Number(b));
+
+  let text = `🍱 ${school.name} 급식
+${formatDateKorean(ymd)}
+
+`;
+  text += blocks.map(b => b.text).join('
+
+');
+  text += `
+
+⚠️ 전체 포함 알레르기: ${allergySummary(allNumbers)}`;
+  text += `
+${allergyLegend()}`;
+
   if (role === '학부모') {
-    const dinner = recommendDinner(lines.join(' '));
-    text += `\n\n🍽️ 오늘 저녁 추천\n${dinner.message}\n\n추천 메뉴\n1. ${dinner.menus[0]}\n2. ${dinner.menus[1]}\n3. ${dinner.menus[2]}\n\n🛒 장보기 목록\n${dinner.shopping.join(', ')}`;
+    const baseMeal = pickLunchOrFirst(meals);
+    const baseLines = baseMeal ? parseDishLines(baseMeal.dishesRaw) : [];
+    const dinner = recommendDinner(baseLines.join(' '));
+    const 기준 = baseMeal?.mealType || '급식';
+    text += `
+
+🍽️ 오늘 저녁 추천
+${기준} 메뉴를 기준으로 추천했어요.
+${dinner.message}
+
+추천 메뉴
+1. ${dinner.menus[0]}
+2. ${dinner.menus[1]}
+3. ${dinner.menus[2]}
+
+🛒 장보기 목록
+${dinner.shopping.join(', ')}`;
   }
   return text;
 }
@@ -321,15 +369,15 @@ async function handleUtterance(userId, utterance) {
   if (/^(오늘|오늘급식|오늘 급식|급식|오늘 뭐 나와)$/i.test(utterance)) {
     if (!session.school) return kakaoText('먼저 학교를 등록해주세요.', [qr('학교등록', '학교등록')]);
     const ymd = todayYmd(0);
-    const meal = await getMeal(session.school, ymd);
-    return kakaoText(mealToText(session.school, meal, ymd, session.role), afterButtons);
+    const meals = await getMeals(session.school, ymd);
+    return kakaoText(mealsToText(session.school, meals, ymd, session.role), afterButtons);
   }
 
   if (/^(내일|내일급식|내일 급식|내일 뭐 나와)$/i.test(utterance)) {
     if (!session.school) return kakaoText('먼저 학교를 등록해주세요.', [qr('학교등록', '학교등록')]);
     const ymd = todayYmd(1);
-    const meal = await getMeal(session.school, ymd);
-    return kakaoText(mealToText(session.school, meal, ymd, session.role), afterButtons);
+    const meals = await getMeals(session.school, ymd);
+    return kakaoText(mealsToText(session.school, meals, ymd, session.role), afterButtons);
   }
 
   if (/^(이번주|이번 주|주간급식|이번주 급식|이번 주 급식)$/i.test(utterance)) {
@@ -365,10 +413,10 @@ app.get('/test', async (req, res) => {
     const date = req.query.date || todayYmd(0);
     const schools = await searchSchools(schoolQuery);
     const school = schools[0] || null;
-    const meal = school ? await getMeal(school, date) : null;
-    const lines = meal ? parseDishLines(meal.dishesRaw) : [];
+    const meals = school ? await getMeals(school, date) : [];
+    const lines = meals.flatMap(meal => parseDishLines(meal.dishesRaw));
     const allergyNumbers = extractAllergyNumbers(lines);
-    res.json({ ok: true, query: schoolQuery, date, school, meal, lines, allergyNumbers, allergySummary: allergySummary(allergyNumbers) });
+    res.json({ ok: true, query: schoolQuery, date, school, meals, lines, allergyNumbers, allergySummary: allergySummary(allergyNumbers) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message, detail: err.response?.data || null });
   }
