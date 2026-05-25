@@ -13,9 +13,17 @@ if (!NEIS_API_KEY) console.warn('WARN: NEIS_API_KEY is missing');
 if (!SUPABASE_URL) console.warn('WARN: SUPABASE_URL is missing');
 if (!SUPABASE_SERVICE_ROLE_KEY) console.warn('WARN: SUPABASE_SERVICE_ROLE_KEY is missing');
 
-const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
-  : null;
+let supabase = null;
+try {
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && /^https?:\/\//i.test(SUPABASE_URL.trim())) {
+    supabase = createClient(SUPABASE_URL.trim(), SUPABASE_SERVICE_ROLE_KEY.trim(), { auth: { persistSession: false } });
+  } else {
+    console.warn('WARN: Supabase is disabled. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables.');
+  }
+} catch (error) {
+  console.error('WARN: Failed to initialize Supabase. Server will continue without DB persistence:', error.message);
+  supabase = null;
+}
 
 const ALLERGY_MAP = {
   '1': '난류', '2': '우유', '3': '메밀', '4': '땅콩', '5': '대두', '6': '밀',
