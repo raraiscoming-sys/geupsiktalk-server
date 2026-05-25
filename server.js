@@ -200,29 +200,31 @@ async function handleText(userId, text) {
     ]);
   }
 
-  // 학교 선택 버튼 처리: 학교선택|officeCode|schoolCode|encodedName
-  if (text.startsWith('학교선택|')) {
-    const parts = text.split('|');
-    const selected = {
-      officeCode: parts[1],
-      schoolCode: parts[2],
-      name: decodeURIComponent(parts[3] || ''),
-      officeName: parts[4] ? decodeURIComponent(parts[4]) : '',
-      address: parts[5] ? decodeURIComponent(parts[5]) : ''
-    };
-    user = { ...user, pendingSchool: selected, school: null, role: null, awaitingRole: true, awaitingSchool: false };
+  // 검색 결과에서 번호 선택 처리: 1번, 2번, 1, 2 ...
+  const numberMatch = lower.match(/^([1-9]|10)번?$/);
+  if (numberMatch && Array.isArray(user.pendingSchools) && user.pendingSchools.length) {
+    const idx = parseInt(numberMatch[1], 10) - 1;
+    const selected = user.pendingSchools[idx];
+    if (!selected) {
+      return reply('선택할 수 없는 번호예요. 검색 결과에 있는 번호를 눌러주세요.', [
+        { label: '학교등록', messageText: '학교등록' },
+        { label: '도움말', messageText: '도움말' }
+      ]);
+    }
+    user = { ...user, pendingSchool: selected, pendingSchools: null, school: null, role: null, awaitingRole: true, awaitingSchool: false };
     users.set(userId, user);
-    return reply(`🏫 ${selected.name}을(를) 선택했어요.\n\n어떤 사용자로 이용하시나요?`, [
+    return reply(`🏫 ${selected.name}을(를) 선택했어요.\n${selected.officeName}\n${selected.address}\n\n어떤 사용자로 이용하시나요?`, [
       { label: '학생', messageText: '학생' },
       { label: '학부모', messageText: '학부모' },
       { label: '학교 다시 등록', messageText: '학교등록' }
     ]);
   }
 
-  // 학교등록 학교명 또는 학교 입력 대기 상태일 때 일반 텍스트를 학교명으로 처리
+  // 학교등록 학교명, 학교 입력 대기 상태, 또는 학교명처럼 보이는 일반 입력을 검색어로 처리
   let schoolKeyword = null;
   if (text.startsWith('학교등록 ')) schoolKeyword = normalizeText(text.replace(/^학교등록\s+/, ''));
   else if (user.awaitingSchool && !['학생','학부모','부모','보호자'].includes(lower)) schoolKeyword = text;
+  else if (!user.school && /(초등학교|중학교|고등학교|초$|중$|고$|학교$)/.test(lower)) schoolKeyword = text;
 
   if (schoolKeyword) {
     const schools = await searchSchool(schoolKeyword);
@@ -243,14 +245,18 @@ async function handleText(userId, text) {
         { label: '학교 다시 등록', messageText: '학교등록' }
       ]);
     }
-    users.set(userId, { ...user, pendingSchools: schools, awaitingSchool: false });
-    const buttons = schools.slice(0, 8).map(s => ({
-      label: s.name.length > 12 ? s.name.slice(0, 11) + '…' : s.name,
-      messageText: `학교선택|${s.officeCode}|${s.schoolCode}|${encodeURIComponent(s.name)}|${encodeURIComponent(s.officeName || '')}|${encodeURIComponent(s.address || '')}`
+    const shown = schools.slice(0, 8);
+    users.set(userId, { ...user, pendingSchools: shown, awaitingSchool: false });
+    const buttons = shown.map((s, i) => ({
+      label: `${i + 1}번 선택`,
+      messageText: `${i + 1}번`
     }));
     buttons.push({ label: '다시 검색', messageText: '학교등록' });
-    const list = schools.slice(0, 8).map((s, i) => `${i+1}. ${s.name} (${s.officeName})`).join('\n');
-    return reply(`'${schoolKeyword}' 검색 결과예요.\n아래에서 학교를 선택해주세요.\n\n${list}`, buttons);
+    const list = shown.map((s, i) => {
+      const region = (s.officeName || '').replace('광역시교육청','').replace('특별시교육청','').replace('도교육청','');
+      return `${i+1}. ${s.name} / ${region}\n   ${s.address || '주소 정보 없음'}`;
+    }).join('\n');
+    return reply(`'${schoolKeyword}' 검색 결과예요.\n이름이 같은 학교가 있을 수 있으니 지역과 주소를 확인한 뒤 번호를 선택해주세요.\n\n${list}`, buttons);
   }
 
   if (['학생','학생입니다','나는학생'].includes(lower) || ['학부모','부모','보호자','나는학부모'].includes(lower)) {
@@ -312,10 +318,10 @@ async function handleText(userId, text) {
 }
 
 app.get('/', (req, res) => {
-  res.type('text/plain').send('geupsiktalk kakao skill server final v2 is running. Use POST /skill');
+  res.type('text/plain').send('geupsiktalk kakao skill server final v3 is running. Use POST /skill');
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, service: 'geupsiktalk', version: 'final-v2' }));
+app.get('/health', (req, res) => res.json({ ok: true, service: 'geupsiktalk', version: 'final-v3' }));
 
 app.get('/test', async (req, res) => {
   try {
@@ -343,5 +349,5 @@ app.post('/skill', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`geupsiktalk final v2 server listening on port ${PORT}`);
+  console.log(`geupsiktalk final v3 server listening on port ${PORT}`);
 });
