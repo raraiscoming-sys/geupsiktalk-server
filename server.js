@@ -197,59 +197,32 @@ function allergyLegend() {
 function singleMealBlock(meal) {
   const lines = parseDishLines(meal.dishesRaw);
   const numbers = extractAllergyNumbers(lines);
-  let text = `🍽️ ${meal.mealType}
-`;
-  text += lines.length ? lines.map(v => `· ${v}`).join('
-') : '메뉴 정보 없음';
-  if (meal.calories) text += `
-🔥 ${meal.calories}`;
-  text += `
-⚠️ ${allergySummary(numbers)}`;
+  let text = `🍽️ ${meal.mealType}\n`;
+  text += lines.length ? lines.map(v => `· ${v}`).join('\n') : '메뉴 정보 없음';
+  if (meal.calories) text += `\n🔥 ${meal.calories}`;
+  text += `\n⚠️ ${allergySummary(numbers)}`;
   return { text, lines, numbers };
 }
 
 function mealsToText(school, meals, ymd, role) {
   if (!meals || !meals.length) {
-    return `🍱 ${school.name}
-${formatDateKorean(ymd)} 급식 정보가 없어요.
-
-휴일, 방학, 재량휴업일이거나 아직 급식 정보가 등록되지 않았을 수 있어요.`;
+    return `🍱 ${school.name}\n${formatDateKorean(ymd)} 급식 정보가 없어요.\n\n휴일, 방학, 재량휴업일이거나 아직 급식 정보가 등록되지 않았을 수 있어요.`;
   }
 
   const blocks = meals.map(singleMealBlock);
   const allNumbers = Array.from(new Set(blocks.flatMap(b => b.numbers))).sort((a,b) => Number(a)-Number(b));
 
-  let text = `🍱 ${school.name} 급식
-${formatDateKorean(ymd)}
-
-`;
-  text += blocks.map(b => b.text).join('
-
-');
-  text += `
-
-⚠️ 전체 포함 알레르기: ${allergySummary(allNumbers)}`;
-  text += `
-${allergyLegend()}`;
+  let text = `🍱 ${school.name} 급식\n${formatDateKorean(ymd)}\n\n`;
+  text += blocks.map(b => b.text).join('\n\n');
+  text += `\n\n⚠️ 전체 포함 알레르기: ${allergySummary(allNumbers)}`;
+  text += `\n${allergyLegend()}`;
 
   if (role === '학부모') {
     const baseMeal = pickLunchOrFirst(meals);
     const baseLines = baseMeal ? parseDishLines(baseMeal.dishesRaw) : [];
     const dinner = recommendDinner(baseLines.join(' '));
-    const 기준 = baseMeal?.mealType || '급식';
-    text += `
-
-🍽️ 오늘 저녁 추천
-${기준} 메뉴를 기준으로 추천했어요.
-${dinner.message}
-
-추천 메뉴
-1. ${dinner.menus[0]}
-2. ${dinner.menus[1]}
-3. ${dinner.menus[2]}
-
-🛒 장보기 목록
-${dinner.shopping.join(', ')}`;
+    const baseLabel = baseMeal?.mealType || '급식';
+    text += `\n\n🍽️ 오늘 저녁 추천\n${baseLabel} 메뉴를 기준으로 추천했어요.\n${dinner.message}\n\n추천 메뉴\n1. ${dinner.menus[0]}\n2. ${dinner.menus[1]}\n3. ${dinner.menus[2]}\n\n🛒 장보기 목록\n${dinner.shopping.join(', ')}`;
   }
   return text;
 }
@@ -386,13 +359,16 @@ async function handleUtterance(userId, utterance) {
     const labels = ['월', '화', '수', '목', '금'];
     const parts = [];
     for (let i=0; i<dates.length; i++) {
-      const meal = await getMeal(session.school, dates[i]);
-      if (!meal) {
+      const meals = await getMeals(session.school, dates[i]);
+      if (!meals || !meals.length) {
         parts.push(`${labels[i]} ${formatDateKorean(dates[i])}\n급식 정보 없음`);
       } else {
-        const lines = parseDishLines(meal.dishesRaw);
-        const nums = extractAllergyNumbers(lines);
-        parts.push(`${labels[i]} ${formatDateKorean(dates[i])}\n${lines.join(' / ')}\n⚠️ ${allergySummary(nums)}`);
+        const dayBlocks = meals.map(meal => {
+          const lines = parseDishLines(meal.dishesRaw);
+          const nums = extractAllergyNumbers(lines);
+          return `🍽️ ${meal.mealType}\n${lines.join(' / ')}\n⚠️ ${allergySummary(nums)}`;
+        });
+        parts.push(`${labels[i]} ${formatDateKorean(dates[i])}\n${dayBlocks.join('\n')}`);
       }
     }
     return kakaoText(`📅 ${session.school.name} 이번 주 급식표\n\n${parts.join('\n\n')}\n\n${allergyLegend()}`, afterButtons);
