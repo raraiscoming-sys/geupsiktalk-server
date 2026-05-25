@@ -186,7 +186,13 @@ function yyyymmdd(date) {
   return `${yyyy}${mm}${dd}`;
 }
 function dateDisplay(dateStr) {
-  return `${dateStr.slice(0,4)}.${dateStr.slice(4,6)}.${dateStr.slice(6,8)}`;
+  const yyyy = Number(dateStr.slice(0,4));
+  const mm = Number(dateStr.slice(4,6));
+  const dd = Number(dateStr.slice(6,8));
+  const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+  const date = new Date(yyyy, mm - 1, dd);
+  const day = weekdays[date.getDay()] || '';
+  return `${dateStr.slice(0,4)}.${dateStr.slice(4,6)}.${dateStr.slice(6,8)}.(${day})`;
 }
 function addDays(date, days) {
   const d = new Date(date.getTime());
@@ -414,13 +420,12 @@ async function handleWeek(user) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
   const school = { office_code: user.office_code, school_code: user.school_code };
-  const labels = ['월', '화', '수', '목', '금'];
   let text = `📅 ${user.school_name} 이번 주 급식표\n`;
   const dates = weekDates(new Date());
   for (let i = 0; i < dates.length; i++) {
     const ds = yyyymmdd(dates[i]);
     const meals = await fetchMeals(school, ds);
-    text += `\n${labels[i]} ${dateDisplay(ds)}\n`;
+    text += `\n${dateDisplay(ds)}\n`;
     if (meals.length === 0) {
       text += '급식 정보 없음\n';
     } else {
