@@ -34,6 +34,37 @@ const ALLERGY_MAP = {
 
 const MEAL_ORDER = { '조식': 1, '중식': 2, '석식': 3 };
 
+// Render 서버의 기본 시간대는 UTC일 수 있습니다.
+// 급식톡은 한국 학교 급식 서비스이므로 모든 기준 날짜는 Asia/Seoul 기준으로 계산합니다.
+const TIME_ZONE = 'Asia/Seoul';
+const NEIS_TIMEOUT_MS = Number(process.env.NEIS_TIMEOUT_MS || 4500);
+const cache = new Map();
+
+function getKoreaToday() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const get = (type) => parts.find(p => p.type === type)?.value;
+  return new Date(Number(get('year')), Number(get('month')) - 1, Number(get('day')));
+}
+
+function getCache(key) {
+  const item = cache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expiresAt) {
+    cache.delete(key);
+    return null;
+  }
+  return item.value;
+}
+
+function setCache(key, value, ttlMs) {
+  cache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
 function textResponse(text, quickReplies = []) {
   return {
     version: '2.0',
@@ -115,6 +146,7 @@ function mainMenuButtons() {
     { label: '오늘 급식', messageText: '오늘' },
     { label: '내일 급식', messageText: '내일' },
     { label: '이번 주 급식', messageText: '이번주' },
+    { label: '다음 주 급식', messageText: '다음주' },
     { label: '도움말', messageText: '도움말' }
   ];
 }
@@ -124,6 +156,7 @@ function registeredButtons() {
     { label: '오늘 급식', messageText: '오늘' },
     { label: '내일 급식', messageText: '내일' },
     { label: '이번 주 급식', messageText: '이번주' },
+    { label: '다음 주 급식', messageText: '다음주' },
     { label: '학교 변경', messageText: '학교변경' }
   ];
 }
@@ -207,6 +240,8 @@ function weekDates(base = new Date()) {
 }
 
 async function neisFetch(endpoint, params) {
+  if (!NEIS_API_KEY) throw new Error('NEIS_API_KEY is missing');
+
   const url = new URL(`https://open.neis.go.kr/hub/${endpoint}`);
   url.searchParams.set('KEY', NEIS_API_KEY || '');
   url.searchParams.set('Type', 'json');
@@ -215,9 +250,23 @@ async function neisFetch(endpoint, params) {
   Object.entries(params).forEach(([k,v]) => {
     if (v !== undefined && v !== null && k !== 'pSize') url.searchParams.set(k, v);
   });
-  const res = await fetch(url.toString());
-  const json = await res.json();
-  return json;
+
+  const cacheKey = `neis:${endpoint}:${url.searchParams.toString()}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), NEIS_TIMEOUT_MS);
+  try {
+    const res = await fetch(url.toString(), { signal: controller.signal });
+    if (!res.ok) throw new Error(`NEIS HTTP ${res.status}`);
+    const json = await res.json();
+    const ttl = endpoint === 'schoolInfo' ? 1000 * 60 * 60 * 12 : 1000 * 60 * 30;
+    setCache(cacheKey, json, ttl);
+    return json;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function searchSchools(query) {
@@ -393,7 +442,7 @@ async function handleUserType(kakaoUserId, user, text) {
   const type = normalizeUserType(text);
   await saveUser(kakaoUserId, { user_type: type, pending_action: null });
   return textResponse(
-    `${user.school_name} / ${type}으로 등록했어요.\n\n이제 오늘, 내일, 이번주 급식을 확인할 수 있어요.`,
+    `${user.school_name} / ${type}으로 등록했어요.\n\n이제 오늘, 내일, 이번주, 다음주 급식을 확인할 수 있어요.`,
     registeredButtons()
   );
 }
@@ -402,7 +451,7 @@ async function handleMealLookup(user, when) {
   if (!user?.school_code || !user?.office_code) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
-  const today = new Date();
+  const today = getKoreaToday();
   let date = today;
   if (when === 'tomorrow') date = addDays(today, 1);
   const dateStr = yyyymmdd(date);
@@ -415,16 +464,25 @@ async function handleMealLookup(user, when) {
   return textResponse(text, registeredButtons());
 }
 
-async function handleWeek(user) {
+async function handleWeek(user, weekOffset = 0) {
   if (!user?.school_code || !user?.office_code) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
   const school = { office_code: user.office_code, school_code: user.school_code };
-  let text = `📅 ${user.school_name} 이번 주 급식표\n`;
-  const dates = weekDates(new Date());
-  for (let i = 0; i < dates.length; i++) {
-    const ds = yyyymmdd(dates[i]);
-    const meals = await fetchMeals(school, ds);
+  const title = weekOffset === 1 ? '다음 주 급식표' : '이번 주 급식표';
+  let text = `📅 ${user.school_name} ${title}\n`;
+  const dates = weekDates(addDays(getKoreaToday(), weekOffset * 7));
+  const dateStrings = dates.map(yyyymmdd);
+  const mealResults = await Promise.all(
+    dateStrings.map(ds => fetchMeals(school, ds).catch(err => {
+      console.error('fetchMeals week error:', ds, err.message);
+      return [];
+    }))
+  );
+
+  for (let i = 0; i < dateStrings.length; i++) {
+    const ds = dateStrings[i];
+    const meals = mealResults[i];
     text += `\n${dateDisplay(ds)}\n`;
     if (meals.length === 0) {
       text += '급식 정보 없음\n';
@@ -477,7 +535,10 @@ async function handleSkill(body) {
     return handleMealLookup(user, 'tomorrow');
   }
   if (['이번주', '이번 주', '이번주 급식', '이번 주 급식', '주간급식'].includes(text)) {
-    return handleWeek(user);
+    return handleWeek(user, 0);
+  }
+  if (['다음주', '다음 주', '다음주 급식', '다음 주 급식'].includes(text)) {
+    return handleWeek(user, 1);
   }
 
   // If user is in school-name input state, treat any non-command text as school search.
@@ -493,13 +554,13 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
-  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, time: new Date().toISOString() });
+  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())) });
 });
 
 app.get('/test', async (req, res) => {
   try {
     const schoolName = req.query.school || '백양고등학교';
-    const date = req.query.date || yyyymmdd(new Date());
+    const date = req.query.date || yyyymmdd(getKoreaToday());
     const schools = await searchSchools(schoolName);
     const school = schools[0];
     const meals = school ? await fetchMeals(school, date) : [];

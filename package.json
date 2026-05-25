@@ -1,7 +1,7 @@
 {
   "name": "geupsiktalk-skill-server",
-  "version": "1.0.0",
-  "description": "Kakao chatbot skill server for school meal lookup with Supabase persistence",
+  "version": "1.0.6",
+  "description": "Kakao chatbot skill server for school meal lookup with Supabase persistence, KST dates, timeout and cache",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
