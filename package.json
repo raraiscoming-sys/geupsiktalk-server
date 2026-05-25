@@ -1,15 +1,13 @@
 {
-  "name": "geupsiktalk-kakao-skill-server",
-  "version": "3.0.0",
-  "description": "Kakao chatbot skill server for school meal lookup",
+  "name": "geupsiktalk-render-minimal-server",
+  "version": "1.0.0",
+  "description": "Minimal Kakao skill server test for Render",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18"
   },
-  "dependencies": {
-    "express": "^4.18.3"
-  }
+  "dependencies": {}
 }

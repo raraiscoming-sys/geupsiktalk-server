@@ -1,39 +1,24 @@
-# 급식톡 카카오 챗봇 스킬 서버 v3
+# 급식톡 Render 최소 테스트 서버
 
-Render 배포용 안정 테스트 버전입니다.
+이 서버는 급식 기능을 잠시 빼고 Render 배포가 되는지만 확인하는 최소 서버입니다.
 
-## Render 설정
+GitHub 저장소에는 아래 2개 파일만 올려도 됩니다.
 
-Build Command:
-```
-npm install
-```
+- package.json
+- server.js
 
-Start Command:
-```
-npm start
-```
+Render 설정값:
 
-Environment Variables:
-```
-NEIS_API_KEY=나이스 API 키
-NODE_ENV=production
-```
+- Runtime: Node
+- Build Command: npm install
+- Start Command: npm start
 
-## 테스트 주소
+배포 성공 후 브라우저에서 아래 주소를 확인하세요.
 
-배포 후 브라우저에서 아래 주소를 확인하세요.
-
-```
-https://렌더주소.onrender.com/
-```
+https://본인주소.onrender.com/
 
 정상 문구:
-```
-geupsiktalk kakao skill server is running. Use POST /skill
-```
+geupsiktalk minimal server is running.
 
 카카오 스킬 URL:
-```
-https://렌더주소.onrender.com/skill
-```
+https://본인주소.onrender.com/skill
