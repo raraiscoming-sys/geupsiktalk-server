@@ -163,7 +163,7 @@ function registeredButtons() {
 
 function userTypeButtons() {
   return [
-    { label: '학생', messageText: '학생' },
+    { label: '학생(교직원)', messageText: '학생(교직원)' },
     { label: '학부모', messageText: '학부모' },
     { label: '학교 다시 검색', messageText: '학교등록' }
   ];
@@ -177,7 +177,7 @@ function searchAgainButtons() {
 }
 
 function helpText() {
-  return `🍱 급식톡 사용 방법\n\n1. [학교등록]을 누르거나 “학교등록”이라고 입력하세요.\n2. 안내가 나오면 학교명을 입력하세요.\n3. 같은 이름의 학교가 여러 개면 지역과 주소를 보고 번호를 선택하세요.\n4. 학생/학부모를 선택하면 등록이 끝납니다.\n\n학교명은 약칭보다 정식 학교명이 정확해요.\n예) 남천중 → 남천중학교\n예) 00여중 → 00여자중학교\n예) 백양고 → 백양고등학교`; 
+  return `🍱 급식톡 사용 방법\n\n1. [학교등록]을 누르거나 “학교등록”이라고 입력하세요.\n2. 안내가 나오면 학교명을 입력하세요.\n3. 같은 이름의 학교가 여러 개면 지역과 주소를 보고 번호를 선택하세요.\n4. 학생(교직원)/학부모를 선택하면 등록이 끝납니다.\n\n학교명은 약칭보다 정식 학교명이 정확해요.\n예) 남천중 → 남천중학교\n예) 00여중 → 00여자중학교\n예) 백양고 → 백양고등학교`; 
 }
 
 function normalizeQuery(raw) {
@@ -199,11 +199,11 @@ function isChangeSchool(text) {
   return ['학교변경', '학교 변경', '학교 바꾸기', '학교바꾸기', '다시 검색'].includes(text);
 }
 function isUserType(text) {
-  return ['학생', '나는 학생', '학생입니다', '학부모', '부모', '보호자', '나는 학부모', '학부모입니다'].includes(text);
+  return ['학생', '학생(교직원)', '교직원', '교사', '선생님', '나는 학생', '학생입니다', '학부모', '부모', '보호자', '나는 학부모', '학부모입니다'].includes(text);
 }
 function normalizeUserType(text) {
   if (text.includes('학부모') || text.includes('부모') || text.includes('보호자')) return '학부모';
-  return '학생';
+  return '학생(교직원)';
 }
 function parseSelection(text) {
   const m = text.match(/^(\d+)(?:번)?(?:\s*선택)?$/);
