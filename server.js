@@ -147,6 +147,7 @@ function mainMenuButtons() {
     { label: '내일 급식', messageText: '내일' },
     { label: '이번 주 급식', messageText: '이번주' },
     { label: '다음 주 급식', messageText: '다음주' },
+    { label: '문의사항', messageText: '문의사항' },
     { label: '도움말', messageText: '도움말' }
   ];
 }
@@ -157,6 +158,7 @@ function registeredButtons() {
     { label: '내일 급식', messageText: '내일' },
     { label: '이번 주 급식', messageText: '이번주' },
     { label: '다음 주 급식', messageText: '다음주' },
+    { label: '문의사항', messageText: '문의사항' },
     { label: '학교 변경', messageText: '학교변경' }
   ];
 }
@@ -191,6 +193,12 @@ function normalizeQuery(raw) {
 
 function isHelp(text) {
   return ['처음', '시작', '설정', '도움말', '메뉴', '사용법'].includes(text);
+}
+function isInquiry(text) {
+  return ['문의사항', '문의하기', '문의', '오류문의', '오류 신고', '오류신고', '불편사항', '버그 신고', '버그신고', '상담'].includes(text);
+}
+function inquiryText() {
+  return `📮 문의사항 안내\n\n급식톡 이용 중 오류나 불편한 점이 있으면 이 채팅방에 남겨주세요.\n\n아래 내용을 함께 적어주시면 더 빠르게 확인할 수 있어요.\n1. 학교명\n2. 이용 기능\n3. 오류 내용\n4. 오류가 발생한 날짜와 시간\n\n예)\n남천중학교 / 학교등록 / 검색이 안 돼요\n백양고등학교 / 오늘 급식 / 날짜가 이상해요\nOO고등학교 / 이번 주 급식 / 석식이 안 보여요\n\n확인 후 개선하겠습니다.`;
 }
 function isRegisterStart(text) {
   return ['학교등록', '학교 등록', '학교검색', '학교 검색'].includes(text);
@@ -505,6 +513,8 @@ async function handleSkill(body) {
   let user = await getUser(kakaoUserId);
 
   if (isHelp(text)) return textResponse(helpText(), mainMenuButtons());
+
+  if (isInquiry(text)) return textResponse(inquiryText(), registeredButtons());
 
   if (isChangeSchool(text)) {
     await clearUser(kakaoUserId);
