@@ -270,9 +270,6 @@ function allergySummary(nums) {
   return nums.map(n => `${n}.${ALLERGY_MAP[n]}`).join(' · ');
 }
 
-function allergyLegendShort() {
-  return '알레르기 번호: 1난류 2우유 3메밀 4땅콩 5대두 6밀 7고등어 8게 9새우 10돼지고기 11복숭아 12토마토 13아황산류 14호두 15닭고기 16쇠고기 17오징어 18조개류 19잣';
-}
 
 function formatMealDay(schoolName, dateStr, meals) {
   if (!meals || meals.length === 0) {
@@ -286,7 +283,6 @@ function formatMealDay(schoolName, dateStr, meals) {
     if (meal.calorie) text += `\n🔥 ${meal.calorie}`;
     text += `\n⚠️ ${allergySummary(nums)}\n`;
   }
-  text += `\n${allergyLegendShort()}`;
   return text;
 }
 
