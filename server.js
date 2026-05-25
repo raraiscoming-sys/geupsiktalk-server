@@ -137,9 +137,9 @@ async function getMeal(school, date) {
 }
 
 function actionButtons(role) {
-  const base = [qr('오늘 급식', '오늘'), qr('내일 급식', '내일'), qr('이번 주 급식', '이번주'), qr('학교 변경', '학교변경')];
-  if (role === '학부모') return [qr('저녁추천', '저녁추천'), qr('장보기', '장보기'), ...base];
-  return base;
+  // 학부모에게는 급식 조회 결과 아래에 저녁 추천과 장보기 목록이 함께 표시됩니다.
+  // 그래서 별도의 '저녁추천', '장보기' 버튼은 기본 메뉴에서 제외했습니다.
+  return [qr('오늘 급식', '오늘'), qr('내일 급식', '내일'), qr('이번 주 급식', '이번주'), qr('학교 변경', '학교변경')];
 }
 
 function startGuide() {
@@ -153,6 +153,9 @@ function startGuide() {
 백양고등학교
 남천중학교
 서울고등학교
+
+검색이 안 되면 약칭보다 정식 학교명을 입력해주세요.
+예) 00여중 → 00여자중학교
 
 학교명이 같은 경우 지역과 주소를 보고 선택할 수 있어요.`,
     [qr('학교등록', '학교등록'), qr('학교변경', '학교변경'), qr('오늘 급식', '오늘'), qr('이번 주 급식', '이번주')]
@@ -170,7 +173,9 @@ function askSchoolName(session) {
 남천중학교
 서울고등학교
 
-학교명 일부만 입력해도 검색할 수 있어요.`,
+학교명 일부만 입력해도 검색할 수 있지만,
+검색이 안 되면 약칭 대신 정식 학교명으로 입력해주세요.
+예) 00여중 → 00여자중학교`,
     [qr('도움말', '처음')]
   );
 }
@@ -181,7 +186,10 @@ function schoolSearchResultMessage(keyword, results) {
 `'${keyword}' 검색 결과가 없어요.
 
 학교명을 다시 입력해주세요.
-예) 남천중학교, 백양고등학교, 서울고등학교`,
+학교 약칭보다는 나이스에 등록된 정식 학교명으로 검색하면 더 정확해요.
+예) 00여중 → 00여자중학교
+예) 남천중 → 남천중학교
+예) 백양고 → 백양고등학교`,
       [qr('다시 검색', '학교등록'), qr('도움말', '처음')]
     );
   }
@@ -349,13 +357,15 @@ async function handleMessage(userId, text) {
 `제가 이해하지 못했어요.
 
 학교를 등록하려면 [학교등록]을 누른 뒤 학교명을 입력해주세요.
-예) 남천중학교`,
+검색이 안 되면 약칭보다 정식 학교명으로 입력하면 더 정확해요.
+예) 00여중 → 00여자중학교
+예) 남천중 → 남천중학교`,
     FALLBACK_BUTTONS
   );
 }
 
 app.get('/', (req, res) => res.send('geupsiktalk kakao skill server is running. Use POST /skill'));
-app.get('/health', (req, res) => res.json({ ok: true, service: 'geupsiktalk', version: '4.0.0' }));
+app.get('/health', (req, res) => res.json({ ok: true, service: 'geupsiktalk', version: '5.0.0' }));
 app.get('/test', async (req, res) => {
   try {
     const schoolKeyword = req.query.school || '백양고등학교';
