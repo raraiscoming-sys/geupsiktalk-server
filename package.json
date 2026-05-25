@@ -1,13 +1,14 @@
 {
   "name": "geupsiktalk-skill-server",
-  "version": "4.0.0",
+  "version": "1.0.0",
   "description": "Kakao chatbot skill server for Korean school meal lookup",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "axios": "^1.7.9",
+    "express": "^4.18.3"
   },
   "engines": {
     "node": ">=18"
