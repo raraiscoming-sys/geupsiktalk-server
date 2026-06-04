@@ -510,40 +510,81 @@ async function handleMealLookup(user, when) {
   return textResponse(text, registeredButtons());
 }
 
-async function handleWeek(user, weekOffset = 0) {
+function compactText(text, max = 150) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t.length > max ? t.slice(0, max - 1) + '…' : t;
+}
+
+function formatWeeklyDayCompact(dateStr, meals) {
+  let text = `${dateDisplay(dateStr)}`;
+  if (!meals || meals.length === 0) return text + '\n급식 정보 없음';
+  for (const meal of meals) {
+    const menu = compactText(meal.dishes.join(' / '), 180);
+    text += `\n🍽️ ${meal.mealType}: ${menu}`;
+    if (meal.calorie) text += `\n🔥 ${meal.calorie}`;
+  }
+  return text;
+}
+
+
+const WEEKDAY_LABELS = ['월', '화', '수', '목', '금'];
+const WEEKDAY_ALIASES = {
+  '월': 0, '월요일': 0,
+  '화': 1, '화요일': 1,
+  '수': 2, '수요일': 2,
+  '목': 3, '목요일': 3,
+  '금': 4, '금요일': 4
+};
+
+function weekDayButtons(weekOffset = 0) {
+  const prefix = weekOffset === 1 ? '다음주' : '이번주';
+  return WEEKDAY_LABELS.map(day => ({
+    label: `${day}요일`,
+    messageText: `${prefix} ${day}요일`
+  })).concat([{ label: '메뉴', messageText: '도움말' }]);
+}
+
+function parseWeekdayRequest(text) {
+  const compact = String(text || '').replace(/\s+/g, '');
+  let weekOffset = null;
+  if (compact.startsWith('이번주') || compact.startsWith('이번주급식')) weekOffset = 0;
+  if (compact.startsWith('다음주') || compact.startsWith('다음주급식')) weekOffset = 1;
+  if (weekOffset === null) return null;
+
+  for (const [alias, index] of Object.entries(WEEKDAY_ALIASES)) {
+    if (compact.includes(alias)) return { weekOffset, index };
+  }
+  return null;
+}
+
+async function handleWeekMenu(user, weekOffset = 0) {
   if (!user?.school_code || !user?.office_code) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
-  const school = { office_code: user.office_code, school_code: user.school_code };
-  const title = weekOffset === 1 ? '다음 주 급식표' : '이번 주 급식표';
-  const dates = weekDates(addDays(getKoreaToday(), weekOffset * 7));
-  const dateStrings = dates.map(yyyymmdd);
-  const mealResults = await Promise.all(
-    dateStrings.map(ds => fetchMeals(school, ds).catch(err => {
-      console.error('fetchMeals week error:', ds, err.message);
-      return [];
-    }))
+  const title = weekOffset === 1 ? '다음 주' : '이번 주';
+  return textResponse(
+    `📅 ${user.school_name} ${title} 급식\n\n확인할 요일을 선택해주세요.\n선택한 요일의 조식·중식·석식, 칼로리, 알레르기 요약을 자세히 보여드릴게요.`,
+    weekDayButtons(weekOffset)
   );
+}
 
-  const bubbles = [`📅 ${user.school_name} ${title}\n메뉴 뒤 괄호 번호는 알레르기 번호예요.`];
-
-  for (let i = 0; i < dateStrings.length; i++) {
-    const ds = dateStrings[i];
-    const meals = mealResults[i];
-    let dayText = `${dateDisplay(ds)}`;
-    if (meals.length === 0) {
-      dayText += '\n급식 정보 없음';
-    } else {
-      for (const meal of meals) {
-        dayText += `\n\n🍽️ ${meal.mealType}\n`;
-        dayText += meal.dishes.map(d => `· ${d}`).join('\n');
-        if (meal.calorie) dayText += `\n🔥 ${meal.calorie}`;
-      }
-    }
-    bubbles.push(dayText);
+async function handleWeekdayMeal(user, weekOffset, weekdayIndex) {
+  if (!user?.school_code || !user?.office_code) {
+    return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
-
-  return multiTextResponse(bubbles, registeredButtons());
+  const dates = weekDates(addDays(getKoreaToday(), weekOffset * 7));
+  const target = dates[weekdayIndex];
+  if (!target) return textResponse('요일을 확인할 수 없어요. 다시 선택해주세요.', registeredButtons());
+  const dateStr = yyyymmdd(target);
+  const school = { office_code: user.office_code, school_code: user.school_code };
+  const meals = await fetchMeals(school, dateStr);
+  let text = formatMealDay(user.school_name, dateStr, meals);
+  if (user.user_type === '학부모' && meals.length > 0) {
+    text += parentDinnerSuggestion(meals);
+  }
+  const navButtons = weekDayButtons(weekOffset).filter(b => b.messageText !== (weekOffset === 1 ? '다음주' : '이번주'));
+  navButtons.push({ label: '오늘 급식', messageText: '오늘' });
+  return textResponse(text, navButtons.slice(0, 10));
 }
 
 async function handleSkill(body) {
@@ -582,11 +623,16 @@ async function handleSkill(body) {
   if (['내일', '내일급식', '내일 급식', '내일 뭐 나와'].includes(text)) {
     return handleMealLookup(user, 'tomorrow');
   }
+  const weekdayRequest = parseWeekdayRequest(text);
+  if (weekdayRequest) {
+    return handleWeekdayMeal(user, weekdayRequest.weekOffset, weekdayRequest.index);
+  }
+
   if (['이번주', '이번 주', '이번주 급식', '이번 주 급식', '주간급식'].includes(text)) {
-    return handleWeek(user, 0);
+    return handleWeekMenu(user, 0);
   }
   if (['다음주', '다음 주', '다음주 급식', '다음 주 급식'].includes(text)) {
-    return handleWeek(user, 1);
+    return handleWeekMenu(user, 1);
   }
 
   // If user is in school-name input state, treat any non-command text as school search.
