@@ -481,7 +481,7 @@ async function handleWeek(user, weekOffset = 0) {
   }
   const school = { office_code: user.office_code, school_code: user.school_code };
   const title = weekOffset === 1 ? '다음 주 급식표' : '이번 주 급식표';
-  let text = `📅 ${user.school_name} ${title}\n`;
+  let text = `📅 ${user.school_name} ${title}\n메뉴 뒤 괄호 번호는 알레르기 번호예요.\n`;
   const dates = weekDates(addDays(getKoreaToday(), weekOffset * 7));
   const dateStrings = dates.map(yyyymmdd);
   const mealResults = await Promise.all(
@@ -499,10 +499,10 @@ async function handleWeek(user, weekOffset = 0) {
       text += '급식 정보 없음\n';
     } else {
       for (const meal of meals) {
-        const dishPreview = meal.dishes.map(d => d.replace(/\([^)]*\)/g, '').trim()).slice(0, 5).join(' / ');
-        const nums = extractAllergyNumbersFromDishes(meal.dishes);
-        text += `· ${meal.mealType}: ${dishPreview}\n`;
-        if (nums.length) text += `  ⚠️ ${allergySummary(nums)}\n`;
+        text += `\n🍽️ ${meal.mealType}\n`;
+        text += meal.dishes.map(d => `· ${d}`).join('\n');
+        if (meal.calorie) text += `\n🔥 ${meal.calorie}`;
+        text += '\n';
       }
     }
   }
