@@ -499,12 +499,10 @@ async function handleWeek(user, weekOffset = 0) {
       text += '급식 정보 없음\n';
     } else {
       for (const meal of meals) {
+        const dishPreview = meal.dishes.map(d => d.replace(/\([^)]*\)/g, '').trim()).slice(0, 5).join(' / ');
         const nums = extractAllergyNumbersFromDishes(meal.dishes);
-        text += `\n🍽️ ${meal.mealType}\n`;
-        text += meal.dishes.map(d => `· ${d}`).join('\n');
-        if (meal.calorie) text += `\n🔥 ${meal.calorie}`;
-        if (nums.length) text += `\n⚠️ ${allergySummary(nums)}`;
-        text += '\n';
+        text += `· ${meal.mealType}: ${dishPreview}\n`;
+        if (nums.length) text += `  ⚠️ ${allergySummary(nums)}\n`;
       }
     }
   }
