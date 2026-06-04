@@ -69,10 +69,20 @@ function setCache(key, value, ttlMs) {
 }
 
 function textResponse(text, quickReplies = []) {
+  return multiTextResponse([text], quickReplies);
+}
+
+function multiTextResponse(texts, quickReplies = []) {
+  const outputs = [];
+  for (const text of texts) {
+    for (const chunk of splitKakaoText(text)) {
+      if (chunk.trim()) outputs.push({ simpleText: { text: chunk } });
+    }
+  }
   return {
     version: '2.0',
     template: {
-      outputs: [{ simpleText: { text: trimKakaoText(text) } }],
+      outputs: outputs.length ? outputs : [{ simpleText: { text: '처리할 내용이 없어요.' } }],
       quickReplies: quickReplies.slice(0, 10).map(q => ({
         label: q.label,
         action: 'message',
@@ -80,6 +90,31 @@ function textResponse(text, quickReplies = []) {
       }))
     }
   };
+}
+
+function splitKakaoText(text, limit = 850) {
+  const source = String(text || '').trim();
+  if (source.length <= limit) return [source];
+  const parts = source.split(/\n(?=\d{4}\.\d{2}\.\d{2}|🍽️|· |🔥|급식 정보 없음)/g);
+  const chunks = [];
+  let current = '';
+  for (const part of parts) {
+    const piece = part.trim();
+    if (!piece) continue;
+    if ((current + '\n' + piece).trim().length <= limit) {
+      current = (current ? current + '\n' : '') + piece;
+    } else {
+      if (current) chunks.push(current);
+      if (piece.length <= limit) {
+        current = piece;
+      } else {
+        for (let i = 0; i < piece.length; i += limit) chunks.push(piece.slice(i, i + limit));
+        current = '';
+      }
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
 }
 
 function trimKakaoText(text) {
@@ -481,7 +516,6 @@ async function handleWeek(user, weekOffset = 0) {
   }
   const school = { office_code: user.office_code, school_code: user.school_code };
   const title = weekOffset === 1 ? '다음 주 급식표' : '이번 주 급식표';
-  let text = `📅 ${user.school_name} ${title}\n메뉴 뒤 괄호 번호는 알레르기 번호예요.\n`;
   const dates = weekDates(addDays(getKoreaToday(), weekOffset * 7));
   const dateStrings = dates.map(yyyymmdd);
   const mealResults = await Promise.all(
@@ -491,22 +525,25 @@ async function handleWeek(user, weekOffset = 0) {
     }))
   );
 
+  const bubbles = [`📅 ${user.school_name} ${title}\n메뉴 뒤 괄호 번호는 알레르기 번호예요.`];
+
   for (let i = 0; i < dateStrings.length; i++) {
     const ds = dateStrings[i];
     const meals = mealResults[i];
-    text += `\n${dateDisplay(ds)}\n`;
+    let dayText = `${dateDisplay(ds)}`;
     if (meals.length === 0) {
-      text += '급식 정보 없음\n';
+      dayText += '\n급식 정보 없음';
     } else {
       for (const meal of meals) {
-        text += `\n🍽️ ${meal.mealType}\n`;
-        text += meal.dishes.map(d => `· ${d}`).join('\n');
-        if (meal.calorie) text += `\n🔥 ${meal.calorie}`;
-        text += '\n';
+        dayText += `\n\n🍽️ ${meal.mealType}\n`;
+        dayText += meal.dishes.map(d => `· ${d}`).join('\n');
+        if (meal.calorie) dayText += `\n🔥 ${meal.calorie}`;
       }
     }
+    bubbles.push(dayText);
   }
-  return textResponse(text, registeredButtons());
+
+  return multiTextResponse(bubbles, registeredButtons());
 }
 
 async function handleSkill(body) {
