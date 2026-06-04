@@ -1,37 +1,23 @@
-# 급식톡 Supabase 서버 v6
+# 급식톡 Supabase 서버 v8 speed-cache
 
-## 수정 내용
+기준: v7(학생(교직원) 버튼) + 한국 날짜 기준 + Supabase 저장 + 속도 개선.
 
-- 기준 날짜를 한국 시간(Asia/Seoul) 기준으로 계산합니다.
-  - Render 서버가 UTC로 동작해도 `오늘`, `내일`, `이번 주`, `다음 주`가 한국 날짜 기준으로 표시됩니다.
-- 나이스 API 호출에 타임아웃을 적용했습니다.
-  - 외부 API가 느릴 때 서버가 오래 멈추는 문제를 줄입니다.
-- 학교 검색/급식 조회 결과를 일정 시간 캐시합니다.
-  - 반복 조회 속도를 개선합니다.
-- 이번 주/다음 주 급식 조회를 병렬 처리합니다.
-  - 월~금 급식표 응답 속도를 개선합니다.
-- `/health`에서 한국 기준 날짜를 확인할 수 있습니다.
+## 추가 개선
+- 사용자 등록 정보를 5분간 메모리 캐시하여 Supabase 조회 지연 감소
+- 학교 검색 결과를 24시간 캐시
+- 급식 조회 결과를 6시간 캐시
+- 도움말/학교등록 시작 등은 Supabase 조회 전에 즉시 처리
+- /health에서 cacheSize, koreaDate 확인 가능
 
-## Render 환경변수
-
+## 환경변수
 필수:
-
-- `NEIS_API_KEY`
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
+- NEIS_API_KEY
+- SUPABASE_URL
+- SUPABASE_SERVICE_ROLE_KEY
 
 선택:
-
-- `NODE_ENV=production`
-- `NEIS_TIMEOUT_MS=4500`
-
-## 확인 주소
-
-- `/health`
-- `/test?school=백양고등학교`
-- `/test?school=백양고등학교&date=20260526`
-
-## 참고
-
-Render Free 요금제는 일정 시간 요청이 없으면 서버가 잠들 수 있습니다.
-서버가 잠든 뒤 첫 요청은 카카오 챗봇 제한 시간보다 늦게 응답할 수 있으므로, 실제 운영 시에는 유료 플랜 또는 외부 모니터링 핑을 고려하세요.
+- NODE_ENV=production
+- USER_CACHE_TTL_MS=300000
+- MEAL_CACHE_TTL_MS=21600000
+- SCHOOL_CACHE_TTL_MS=86400000
+- NEIS_TIMEOUT_MS=4500

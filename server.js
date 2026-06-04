@@ -39,6 +39,9 @@ const MEAL_ORDER = { '조식': 1, '중식': 2, '석식': 3 };
 const TIME_ZONE = 'Asia/Seoul';
 const NEIS_TIMEOUT_MS = Number(process.env.NEIS_TIMEOUT_MS || 4500);
 const cache = new Map();
+const USER_CACHE_TTL_MS = Number(process.env.USER_CACHE_TTL_MS || 1000 * 60 * 5);
+const MEAL_CACHE_TTL_MS = Number(process.env.MEAL_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
+const SCHOOL_CACHE_TTL_MS = Number(process.env.SCHOOL_CACHE_TTL_MS || 1000 * 60 * 60 * 24);
 
 function getKoreaToday() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -94,6 +97,9 @@ function getUtterance(body) {
 }
 
 async function getUser(kakaoUserId) {
+  const cacheKey = `user:${kakaoUserId}`;
+  const cached = getCache(cacheKey);
+  if (cached !== null) return cached;
   if (!supabase) return null;
   const { data, error } = await supabase
     .from('kakao_users')
@@ -104,6 +110,7 @@ async function getUser(kakaoUserId) {
     console.error('getUser error:', error.message);
     return null;
   }
+  setCache(cacheKey, data || null, USER_CACHE_TTL_MS);
   return data;
 }
 
@@ -123,12 +130,14 @@ async function saveUser(kakaoUserId, patch) {
     console.error('saveUser error:', error.message);
     return null;
   }
+  // Supabase에 저장한 직후에는 메모리에도 같이 저장해서 다음 요청을 빠르게 처리합니다.
+  setCache(`user:${kakaoUserId}`, data || null, USER_CACHE_TTL_MS);
   return data;
 }
 
 async function clearUser(kakaoUserId) {
   if (!supabase) return null;
-  return saveUser(kakaoUserId, {
+  const cleared = await saveUser(kakaoUserId, {
     user_type: null,
     school_name: null,
     office_code: null,
@@ -138,6 +147,8 @@ async function clearUser(kakaoUserId) {
     pending_schools: null,
     pending_action: 'awaiting_school_name'
   });
+  setCache(`user:${kakaoUserId}`, cleared || null, USER_CACHE_TTL_MS);
+  return cleared;
 }
 
 function mainMenuButtons() {
@@ -261,7 +272,7 @@ async function neisFetch(endpoint, params) {
     const res = await fetch(url.toString(), { signal: controller.signal });
     if (!res.ok) throw new Error(`NEIS HTTP ${res.status}`);
     const json = await res.json();
-    const ttl = endpoint === 'schoolInfo' ? 1000 * 60 * 60 * 12 : 1000 * 60 * 30;
+    const ttl = endpoint === 'schoolInfo' ? SCHOOL_CACHE_TTL_MS : MEAL_CACHE_TTL_MS;
     setCache(cacheKey, json, ttl);
     return json;
   } finally {
@@ -554,7 +565,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
-  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())) });
+  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())), cacheSize: cache.size, userCacheTtlMs: USER_CACHE_TTL_MS, mealCacheTtlMs: MEAL_CACHE_TTL_MS });
 });
 
 app.get('/test', async (req, res) => {
