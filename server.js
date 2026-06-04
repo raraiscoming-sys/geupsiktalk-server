@@ -538,10 +538,13 @@ const WEEKDAY_ALIASES = {
 
 function weekDayButtons(weekOffset = 0) {
   const prefix = weekOffset === 1 ? '다음주' : '이번주';
-  return WEEKDAY_LABELS.map(day => ({
-    label: `${day}요일`,
-    messageText: `${prefix} ${day}요일`
-  }));
+  return [
+    ...WEEKDAY_LABELS.map(day => ({
+      label: `${day}요일`,
+      messageText: `${prefix} ${day}요일`
+    })),
+    { label: '오늘 급식', messageText: '오늘' }
+  ];
 }
 
 function parseWeekdayRequest(text) {
@@ -582,8 +585,7 @@ async function handleWeekdayMeal(user, weekOffset, weekdayIndex) {
   if (user.user_type === '학부모' && meals.length > 0) {
     text += parentDinnerSuggestion(meals);
   }
-  const navButtons = weekDayButtons(weekOffset).filter(b => b.messageText !== (weekOffset === 1 ? '다음주' : '이번주'));
-  navButtons.push({ label: '오늘 급식', messageText: '오늘' });
+  const navButtons = weekDayButtons(weekOffset);
   return textResponse(text, navButtons.slice(0, 10));
 }
 
