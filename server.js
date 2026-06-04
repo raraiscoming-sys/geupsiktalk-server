@@ -541,7 +541,7 @@ function weekDayButtons(weekOffset = 0) {
   return WEEKDAY_LABELS.map(day => ({
     label: `${day}요일`,
     messageText: `${prefix} ${day}요일`
-  })).concat([{ label: '메뉴', messageText: '도움말' }]);
+  }));
 }
 
 function parseWeekdayRequest(text) {
