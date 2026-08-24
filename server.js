@@ -37,7 +37,18 @@ const MEAL_ORDER = { '조식': 1, '중식': 2, '석식': 3 };
 // Render 서버의 기본 시간대는 UTC일 수 있습니다.
 // 급식톡은 한국 학교 급식 서비스이므로 모든 기준 날짜는 Asia/Seoul 기준으로 계산합니다.
 const TIME_ZONE = 'Asia/Seoul';
-const NEIS_TIMEOUT_MS = Number(process.env.NEIS_TIMEOUT_MS || 4500);
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+// 카카오 스킬 응답은 너무 오래 걸리면 타임아웃으로 처리됩니다.
+// 사용자가 NEIS_TIMEOUT_MS를 너무 낮게 잡아도 조회 실패가 잦아지므로 3.5~4.5초 사이로 보정합니다.
+const NEIS_TIMEOUT_MS = clampNumber(process.env.NEIS_TIMEOUT_MS, 3500, 4500, 4000);
+// 사용자가 기다리지 않는 백그라운드 캐시 예열은 조금 더 오래 기다립니다.
+const NEIS_WARM_TIMEOUT_MS = clampNumber(process.env.NEIS_WARM_TIMEOUT_MS, 5000, 10000, 8000);
 const cache = new Map();
 const USER_CACHE_TTL_MS = Number(process.env.USER_CACHE_TTL_MS || 1000 * 60 * 5);
 const MEAL_CACHE_TTL_MS = Number(process.env.MEAL_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
@@ -121,6 +132,30 @@ function trimKakaoText(text) {
   if (!text) return '';
   // Kakao simpleText has practical length limits. Keep responses readable.
   return String(text).slice(0, 990);
+}
+
+
+class ExternalServiceTimeoutError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ExternalServiceTimeoutError';
+    this.code = 'NEIS_TIMEOUT';
+  }
+}
+
+class ExternalServiceError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ExternalServiceError';
+    this.code = 'NEIS_ERROR';
+  }
+}
+
+function temporaryMealErrorResponse() {
+  return textResponse(
+    '급식 정보를 불러오는 중 나이스 급식 서버 응답이 지연되고 있어요.\n\n잠시 후 다시 눌러주세요.\n한 번 조회에 성공하면 같은 학교 급식은 더 빠르게 표시되도록 저장해둘게요.',
+    registeredButtons()
+  );
 }
 
 function getUserId(body) {
@@ -285,7 +320,7 @@ function weekDates(base = new Date()) {
   return [0,1,2,3,4].map(i => addDays(monday, i));
 }
 
-async function neisFetch(endpoint, params) {
+async function neisFetch(endpoint, params, timeoutMs = NEIS_TIMEOUT_MS) {
   if (!NEIS_API_KEY) throw new Error('NEIS_API_KEY is missing');
 
   const url = new URL(`https://open.neis.go.kr/hub/${endpoint}`);
@@ -302,14 +337,19 @@ async function neisFetch(endpoint, params) {
   if (cached) return cached;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NEIS_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url.toString(), { signal: controller.signal });
-    if (!res.ok) throw new Error(`NEIS HTTP ${res.status}`);
+    if (!res.ok) throw new ExternalServiceError(`NEIS HTTP ${res.status}`);
     const json = await res.json();
     const ttl = endpoint === 'schoolInfo' ? SCHOOL_CACHE_TTL_MS : MEAL_CACHE_TTL_MS;
     setCache(cacheKey, json, ttl);
     return json;
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw new ExternalServiceTimeoutError(`NEIS ${endpoint} timeout after ${timeoutMs}ms`);
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -329,13 +369,57 @@ async function searchSchools(query) {
   }));
 }
 
-async function fetchMeals(school, dateStr) {
+async function readMealCache(officeCode, schoolCode, dateStr) {
+  const memKey = `mealParsed:${officeCode}:${schoolCode}:${dateStr}`;
+  const mem = getCache(memKey);
+  if (mem !== null) return mem;
+
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('meal_cache')
+    .select('meals, updated_at')
+    .eq('office_code', officeCode)
+    .eq('school_code', schoolCode)
+    .eq('meal_date', dateStr)
+    .maybeSingle();
+
+  if (error) {
+    // meal_cache 테이블을 아직 만들지 않은 경우에도 기존 기능은 계속 작동하게 합니다.
+    console.warn('readMealCache warning:', error.message);
+    return null;
+  }
+
+  if (!data || !Array.isArray(data.meals)) return null;
+  setCache(memKey, data.meals, MEAL_CACHE_TTL_MS);
+  return data.meals;
+}
+
+async function writeMealCache(officeCode, schoolCode, schoolName, dateStr, meals) {
+  const memKey = `mealParsed:${officeCode}:${schoolCode}:${dateStr}`;
+  setCache(memKey, meals, MEAL_CACHE_TTL_MS);
+
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('meal_cache')
+    .upsert({
+      office_code: officeCode,
+      school_code: schoolCode,
+      school_name: schoolName || null,
+      meal_date: dateStr,
+      meals,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'office_code,school_code,meal_date' });
+
+  if (error) console.warn('writeMealCache warning:', error.message);
+}
+
+async function fetchMealsFromNeis(school, dateStr, timeoutMs = NEIS_TIMEOUT_MS) {
   const json = await neisFetch('mealServiceDietInfo', {
     ATPT_OFCDC_SC_CODE: school.officeCode || school.office_code,
     SD_SCHUL_CODE: school.schoolCode || school.school_code,
     MLSV_YMD: dateStr,
     pSize: '20'
-  });
+  }, timeoutMs);
   const rows = json?.mealServiceDietInfo?.[1]?.row || [];
   return rows.map(r => ({
     mealType: r.MMEAL_SC_NM || '급식',
@@ -344,6 +428,30 @@ async function fetchMeals(school, dateStr) {
     calorie: r.CAL_INFO || '',
     nutrition: r.NTR_INFO || ''
   })).sort((a,b) => (MEAL_ORDER[a.mealType] || 99) - (MEAL_ORDER[b.mealType] || 99));
+}
+
+async function fetchMeals(school, dateStr, options = {}) {
+  const officeCode = school.officeCode || school.office_code;
+  const schoolCode = school.schoolCode || school.school_code;
+  const schoolName = school.name || school.school_name || school.schoolName || '';
+
+  const cached = await readMealCache(officeCode, schoolCode, dateStr);
+  if (cached !== null) return cached;
+
+  const meals = await fetchMealsFromNeis(school, dateStr, options.timeoutMs || NEIS_TIMEOUT_MS);
+  await writeMealCache(officeCode, schoolCode, schoolName, dateStr, meals);
+  return meals;
+}
+
+function prefetchMealsForDates(user, dates) {
+  if (!user?.school_code || !user?.office_code) return;
+  const school = { office_code: user.office_code, school_code: user.school_code, school_name: user.school_name };
+  for (const d of dates) {
+    const dateStr = typeof d === 'string' ? d : yyyymmdd(d);
+    // 사용자 응답을 막지 않도록 백그라운드에서 캐시만 예열합니다.
+    fetchMeals(school, dateStr, { timeoutMs: NEIS_WARM_TIMEOUT_MS })
+      .catch(err => console.warn('prefetchMeals warning:', err.code || err.name || err.message, dateStr));
+  }
 }
 
 function parseDishes(raw) {
@@ -486,7 +594,8 @@ async function handleUserType(kakaoUserId, user, text) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
   const type = normalizeUserType(text);
-  await saveUser(kakaoUserId, { user_type: type, pending_action: null });
+  const saved = await saveUser(kakaoUserId, { user_type: type, pending_action: null });
+  prefetchMealsForDates(saved || user, [getKoreaToday(), addDays(getKoreaToday(), 1), ...weekDates(getKoreaToday())]);
   return textResponse(
     `${user.school_name} / ${type}으로 등록했어요.\n\n이제 오늘, 내일, 이번주, 다음주 급식을 확인할 수 있어요.`,
     registeredButtons()
@@ -501,7 +610,7 @@ async function handleMealLookup(user, when) {
   let date = today;
   if (when === 'tomorrow') date = addDays(today, 1);
   const dateStr = yyyymmdd(date);
-  const school = { office_code: user.office_code, school_code: user.school_code };
+  const school = { office_code: user.office_code, school_code: user.school_code, school_name: user.school_name };
   const meals = await fetchMeals(school, dateStr);
   let text = formatMealDay(user.school_name, dateStr, meals);
   if (user.user_type === '학부모' && meals.length > 0) {
@@ -565,6 +674,7 @@ async function handleWeekMenu(user, weekOffset = 0) {
     return textResponse('먼저 학교를 등록해주세요.', [{ label: '학교등록', messageText: '학교등록' }]);
   }
   const title = weekOffset === 1 ? '다음 주' : '이번 주';
+  prefetchMealsForDates(user, weekDates(addDays(getKoreaToday(), weekOffset * 7)));
   return textResponse(
     `📅 ${user.school_name} ${title} 급식\n\n확인할 요일을 선택해주세요.\n선택한 요일의 조식·중식·석식, 칼로리, 알레르기 요약을 자세히 보여드릴게요.`,
     weekDayButtons(weekOffset)
@@ -579,7 +689,7 @@ async function handleWeekdayMeal(user, weekOffset, weekdayIndex) {
   const target = dates[weekdayIndex];
   if (!target) return textResponse('요일을 확인할 수 없어요. 다시 선택해주세요.', registeredButtons());
   const dateStr = yyyymmdd(target);
-  const school = { office_code: user.office_code, school_code: user.school_code };
+  const school = { office_code: user.office_code, school_code: user.school_code, school_name: user.school_name };
   const meals = await fetchMeals(school, dateStr);
   let text = formatMealDay(user.school_name, dateStr, meals);
   if (user.user_type === '학부모' && meals.length > 0) {
@@ -650,7 +760,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
-  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())), cacheSize: cache.size, userCacheTtlMs: USER_CACHE_TTL_MS, mealCacheTtlMs: MEAL_CACHE_TTL_MS });
+  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())), cacheSize: cache.size, userCacheTtlMs: USER_CACHE_TTL_MS, mealCacheTtlMs: MEAL_CACHE_TTL_MS, neisTimeoutMs: NEIS_TIMEOUT_MS, neisWarmTimeoutMs: NEIS_WARM_TIMEOUT_MS });
 });
 
 app.get('/test', async (req, res) => {
@@ -673,6 +783,9 @@ app.post('/skill', async (req, res) => {
     res.json(response);
   } catch (err) {
     console.error('skill error:', err);
+    if (err?.code === 'NEIS_TIMEOUT' || err?.code === 'NEIS_ERROR') {
+      return res.json(temporaryMealErrorResponse());
+    }
     res.json(textResponse('처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.', mainMenuButtons()));
   }
 });
