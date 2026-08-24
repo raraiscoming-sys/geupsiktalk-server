@@ -49,6 +49,11 @@ function clampNumber(value, min, max, fallback) {
 const NEIS_TIMEOUT_MS = clampNumber(process.env.NEIS_TIMEOUT_MS, 3500, 4500, 4000);
 // 사용자가 기다리지 않는 백그라운드 캐시 예열은 조금 더 오래 기다립니다.
 const NEIS_WARM_TIMEOUT_MS = clampNumber(process.env.NEIS_WARM_TIMEOUT_MS, 5000, 10000, 8000);
+// 전체 등록 학교 캐시 예열은 사용자 응답과 무관하므로 조금 더 오래 기다립니다.
+const NEIS_BACKGROUND_TIMEOUT_MS = clampNumber(process.env.NEIS_BACKGROUND_TIMEOUT_MS, 8000, 15000, 12000);
+const WARMUP_MAX_SCHOOLS = clampNumber(process.env.WARMUP_MAX_SCHOOLS, 1, 500, 100);
+const WARMUP_INTERVAL_MS = clampNumber(process.env.WARMUP_INTERVAL_MS, 1000 * 60 * 30, 1000 * 60 * 60 * 24, 1000 * 60 * 60 * 6);
+const WARMUP_TOKEN = process.env.WARMUP_TOKEN || '';
 const cache = new Map();
 const USER_CACHE_TTL_MS = Number(process.env.USER_CACHE_TTL_MS || 1000 * 60 * 5);
 const MEAL_CACHE_TTL_MS = Number(process.env.MEAL_CACHE_TTL_MS || 1000 * 60 * 60 * 6);
@@ -454,6 +459,110 @@ function prefetchMealsForDates(user, dates) {
   }
 }
 
+function warmupDateList() {
+  const today = getKoreaToday();
+  const dates = [today, addDays(today, 1), ...weekDates(today), ...weekDates(addDays(today, 7))].map(yyyymmdd);
+  return [...new Set(dates)];
+}
+
+function normalizeSchoolFromUserRow(row) {
+  if (!row?.office_code || !row?.school_code) return null;
+  return {
+    office_code: row.office_code,
+    school_code: row.school_code,
+    school_name: row.school_name || ''
+  };
+}
+
+async function listRegisteredSchools(limit = WARMUP_MAX_SCHOOLS) {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('kakao_users')
+    .select('school_name, office_code, school_code')
+    .not('office_code', 'is', null)
+    .not('school_code', 'is', null)
+    .limit(limit * 3);
+  if (error) {
+    console.warn('listRegisteredSchools warning:', error.message);
+    return [];
+  }
+  const seen = new Set();
+  const schools = [];
+  for (const row of data || []) {
+    const school = normalizeSchoolFromUserRow(row);
+    if (!school) continue;
+    const key = `${school.office_code}:${school.school_code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    schools.push(school);
+    if (schools.length >= limit) break;
+  }
+  return schools;
+}
+
+async function refreshMealCache(school, dateStr, timeoutMs = NEIS_BACKGROUND_TIMEOUT_MS) {
+  const meals = await fetchMealsFromNeis(school, dateStr, timeoutMs);
+  await writeMealCache(school.office_code || school.officeCode, school.school_code || school.schoolCode, school.school_name || school.name || '', dateStr, meals);
+  return meals;
+}
+
+const warmupState = {
+  running: false,
+  lastStartedAt: null,
+  lastFinishedAt: null,
+  reason: null,
+  schools: 0,
+  dates: 0,
+  ok: 0,
+  fail: 0,
+  lastError: null
+};
+
+async function warmupRegisteredSchools(reason = 'manual') {
+  if (warmupState.running) return { ...warmupState, alreadyRunning: true };
+  warmupState.running = true;
+  warmupState.lastStartedAt = new Date().toISOString();
+  warmupState.lastFinishedAt = null;
+  warmupState.reason = reason;
+  warmupState.ok = 0;
+  warmupState.fail = 0;
+  warmupState.lastError = null;
+
+  try {
+    const schools = await listRegisteredSchools();
+    const dates = warmupDateList();
+    warmupState.schools = schools.length;
+    warmupState.dates = dates.length;
+    console.log(`warmup started: reason=${reason}, schools=${schools.length}, dates=${dates.length}`);
+
+    for (const school of schools) {
+      for (const dateStr of dates) {
+        try {
+          await refreshMealCache(school, dateStr, NEIS_BACKGROUND_TIMEOUT_MS);
+          warmupState.ok += 1;
+        } catch (err) {
+          warmupState.fail += 1;
+          warmupState.lastError = `${err.code || err.name || 'Error'} ${dateStr}`;
+          console.warn('warmup meal warning:', school.school_name, dateStr, err.code || err.name || err.message);
+        }
+      }
+    }
+  } catch (err) {
+    warmupState.lastError = err.message;
+    console.warn('warmup failed:', err.message);
+  } finally {
+    warmupState.running = false;
+    warmupState.lastFinishedAt = new Date().toISOString();
+    console.log(`warmup finished: ok=${warmupState.ok}, fail=${warmupState.fail}`);
+  }
+  return { ...warmupState };
+}
+
+function startWarmup(reason = 'manual') {
+  warmupRegisteredSchools(reason).catch(err => console.warn('warmup background error:', err.message));
+  return { ...warmupState, started: !warmupState.running };
+}
+
 function parseDishes(raw) {
   return raw
     .replace(/<br\s*\/?>/gi, '\n')
@@ -611,12 +720,21 @@ async function handleMealLookup(user, when) {
   if (when === 'tomorrow') date = addDays(today, 1);
   const dateStr = yyyymmdd(date);
   const school = { office_code: user.office_code, school_code: user.school_code, school_name: user.school_name };
-  const meals = await fetchMeals(school, dateStr);
-  let text = formatMealDay(user.school_name, dateStr, meals);
-  if (user.user_type === '학부모' && meals.length > 0) {
-    text += parentDinnerSuggestion(meals);
+  try {
+    const meals = await fetchMeals(school, dateStr);
+    let text = formatMealDay(user.school_name, dateStr, meals);
+    if (user.user_type === '학부모' && meals.length > 0) {
+      text += parentDinnerSuggestion(meals);
+    }
+    return textResponse(text, registeredButtons());
+  } catch (err) {
+    if (err?.code === 'NEIS_TIMEOUT' || err?.code === 'NEIS_ERROR') {
+      refreshMealCache(school, dateStr, NEIS_BACKGROUND_TIMEOUT_MS)
+        .catch(e => console.warn('background refresh warning:', e.code || e.name || e.message, dateStr));
+      return preparingMealResponse(user, dateStr);
+    }
+    throw err;
   }
-  return textResponse(text, registeredButtons());
 }
 
 function compactText(text, max = 150) {
@@ -690,13 +808,22 @@ async function handleWeekdayMeal(user, weekOffset, weekdayIndex) {
   if (!target) return textResponse('요일을 확인할 수 없어요. 다시 선택해주세요.', registeredButtons());
   const dateStr = yyyymmdd(target);
   const school = { office_code: user.office_code, school_code: user.school_code, school_name: user.school_name };
-  const meals = await fetchMeals(school, dateStr);
-  let text = formatMealDay(user.school_name, dateStr, meals);
-  if (user.user_type === '학부모' && meals.length > 0) {
-    text += parentDinnerSuggestion(meals);
+  try {
+    const meals = await fetchMeals(school, dateStr);
+    let text = formatMealDay(user.school_name, dateStr, meals);
+    if (user.user_type === '학부모' && meals.length > 0) {
+      text += parentDinnerSuggestion(meals);
+    }
+    const navButtons = weekDayButtons(weekOffset);
+    return textResponse(text, navButtons.slice(0, 10));
+  } catch (err) {
+    if (err?.code === 'NEIS_TIMEOUT' || err?.code === 'NEIS_ERROR') {
+      refreshMealCache(school, dateStr, NEIS_BACKGROUND_TIMEOUT_MS)
+        .catch(e => console.warn('background refresh warning:', e.code || e.name || e.message, dateStr));
+      return preparingMealResponse(user, dateStr, weekOffset);
+    }
+    throw err;
   }
-  const navButtons = weekDayButtons(weekOffset);
-  return textResponse(text, navButtons.slice(0, 10));
 }
 
 async function handleSkill(body) {
@@ -760,7 +887,19 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', async (req, res) => {
-  res.json({ ok: true, supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())), cacheSize: cache.size, userCacheTtlMs: USER_CACHE_TTL_MS, mealCacheTtlMs: MEAL_CACHE_TTL_MS, neisTimeoutMs: NEIS_TIMEOUT_MS, neisWarmTimeoutMs: NEIS_WARM_TIMEOUT_MS });
+  res.json({ ok: true, version: 'v18-neis-warmup', supabase: !!supabase, neisKey: !!NEIS_API_KEY, utcTime: new Date().toISOString(), koreaToday: yyyymmdd(getKoreaToday()), koreaDate: dateDisplay(yyyymmdd(getKoreaToday())), cacheSize: cache.size, userCacheTtlMs: USER_CACHE_TTL_MS, mealCacheTtlMs: MEAL_CACHE_TTL_MS, neisTimeoutMs: NEIS_TIMEOUT_MS, neisWarmTimeoutMs: NEIS_WARM_TIMEOUT_MS, neisBackgroundTimeoutMs: NEIS_BACKGROUND_TIMEOUT_MS, warmup: warmupState });
+});
+
+app.get('/warmup', async (req, res) => {
+  if (WARMUP_TOKEN && req.query.token !== WARMUP_TOKEN) {
+    return res.status(403).json({ ok: false, error: 'invalid warmup token' });
+  }
+  startWarmup('manual');
+  res.json({ ok: true, message: 'meal cache warmup started', warmup: warmupState });
+});
+
+app.get('/warmup/status', async (req, res) => {
+  res.json({ ok: true, warmup: warmupState });
 });
 
 app.get('/test', async (req, res) => {
@@ -792,4 +931,10 @@ app.post('/skill', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`geupsiktalk server listening on port ${PORT}`);
+  if (process.env.AUTO_WARMUP_ON_START !== 'false') {
+    setTimeout(() => startWarmup('startup'), 5000);
+  }
+  if (process.env.AUTO_WARMUP_INTERVAL !== 'false') {
+    setInterval(() => startWarmup('interval'), WARMUP_INTERVAL_MS);
+  }
 });
